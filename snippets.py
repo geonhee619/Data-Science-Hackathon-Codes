@@ -4,6 +4,11 @@ import matplotlib.pyplot as plt
 import gc
 import warnings; warnings.simplefilter('ignore')
 
+
+# ===================
+# environment related
+# ===================
+
 """def df_parallelize_run(df, func):
     import multiprocessing
     num_partitions, num_cores = psutil.cpu_count(), psutil.cpu_count()
@@ -56,6 +61,11 @@ def reduce_mem_usage(df, use_float16=False):
     print('Decreased by {:.1f}%'.format(100 * (start_mem - end_mem) / start_mem))
     
     return df
+
+
+# ===============
+# feature related
+# ===============
 
 def category_concat(df, subject_cols):
     na_col = list(df.columns[df.isna().any()])
@@ -215,24 +225,6 @@ def apply_mov_stat(df, str_col, list_windows, shift=False, print_option=True):
     del win, rolled, mov_avg, mov_max, mov_min, mov_std; gc.collect()
     # del mov_Q1, mov_Q2, mov_Q3; gc.collect()
 
-def apply_interpolation(df, subject_cols, int_order, supp_median_fill=False):
-    lin = lambda var: var.interpolate(method='linear', limit_direction='both')
-    pol = lambda var: var.interpolate(method='polynomial', order=int_order, limit_direction='both')
-    # ===== in ASHRAE, grouping was done via site_id =====
-    # linear = df.groupby(grouping_col).apply(lin)
-    # polyno = df.groupby(grouping_col).apply(pol)
-    linear = df[subject_cols].apply(lin)
-    polyno = df[subject_cols].apply(pol)
-    df[subject_cols] = (linear[subject_cols] + polyno[subject_cols]) * 0.5
-    
-    # ===== if missing value remains: =====
-    if supp_median_fill:
-        #[col for col in cols if temp[col].isna().sum() > 0]
-        for col in subject_cols:
-            df[col].fillna(df[col].median(), inplace=True)
-            del col
-    del lin, pol, linear, polyno; gc.collect()
-
 def apply_kmeans(df, subject_cols, plot=True):
     from sklearn.cluster import KMeans
     elbow = []
@@ -301,6 +293,44 @@ def apply_nonlinear(df, subject_cols):
             print(f"New nan in '{col}' via apply_nonlinear")
     del col, temp_count; gc.collect()
 
+
+# ============
+# data related
+# ============
+
+def apply_interpolation(df, subject_cols, int_order, supp_median_fill=False):
+    lin = lambda var: var.interpolate(method='linear', limit_direction='both')
+    pol = lambda var: var.interpolate(method='polynomial', order=int_order, limit_direction='both')
+    # ===== in ASHRAE, grouping was done via site_id =====
+    # linear = df.groupby(grouping_col).apply(lin)
+    # polyno = df.groupby(grouping_col).apply(pol)
+    linear = df[subject_cols].apply(lin)
+    polyno = df[subject_cols].apply(pol)
+    df[subject_cols] = (linear[subject_cols] + polyno[subject_cols]) * 0.5
+    
+    # ===== if missing value remains: =====
+    if supp_median_fill:
+        #[col for col in cols if temp[col].isna().sum() > 0]
+        for col in subject_cols:
+            df[col].fillna(df[col].median(), inplace=True)
+            del col
+    del lin, pol, linear, polyno; gc.collect()
+
+
+# =============
+# model related
+# =============
+    
+def plot_feature_importance(model):
+    importance_df = pd.DataFrame(model.feature_importance(),
+                                 index=common_cols + category_cols,
+                                 columns=['importance']).sort_values('importance')
+    fig, ax = plt.subplots(figsize=(10, 13))
+    importance_df.plot.barh(ax=ax)
+    fig.show()
+
+
+# ===== Incomplete =====
 def create_X_y(train_df, target_meter):
     target_train_df = train_df[train_df['meter'] == target_meter]
     target_train_df = target_train_df.merge(building_meta_df, on='building_id', how='left')
@@ -320,11 +350,5 @@ def create_X(test_df, target_meter, train_df):
     X_test = target_test_df[common_cols + category_cols]
     return X_test
 
-def plot_feature_importance(model):
-    importance_df = pd.DataFrame(model.feature_importance(),
-                                 index=common_cols + category_cols,
-                                 columns=['importance']).sort_values('importance')
-    fig, ax = plt.subplots(figsize=(10, 13))
-    importance_df.plot.barh(ax=ax)
-    fig.show()
+
     
