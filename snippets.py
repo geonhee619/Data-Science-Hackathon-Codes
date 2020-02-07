@@ -4,6 +4,16 @@ import matplotlib.pyplot as plt
 import gc
 import warnings; warnings.simplefilter('ignore')
 
+"""def df_parallelize_run(df, func):
+    import multiprocessing
+    num_partitions, num_cores = psutil.cpu_count(), psutil.cpu_count()
+    df_split = np.array_split(df, num_partitions)
+    pool = multiprocessing.Pool(num_cores)
+    df = pd.concat(pool.map(func, df_split))
+    pool.close()
+    pool.join()
+    return df"""
+
 def reduce_mem_usage(df, use_float16=False):
     from pandas.api.types import is_datetime64_any_dtype as is_datetime
     from pandas.api.types import is_categorical_dtype
@@ -46,6 +56,21 @@ def reduce_mem_usage(df, use_float16=False):
     print('Decreased by {:.1f}%'.format(100 * (start_mem - end_mem) / start_mem))
     
     return df
+
+def category_concat(df, subject_cols):
+    na_col = list(df.columns[df.isna().any()])
+    for col in na_col:
+        df[col].fillna('', inplace=True)
+    temp_str = ''
+    for col in subject_cols:
+        temp_str += '_' + col
+    df[temp_str[1:]] = ''
+    for col in subject_cols:
+        df[temp_str[1:]] += df[col]
+    del na_col, temp_str, col; gc.collect()
+        
+def apply_row_nan(df):
+    df['row_nan'] = df.isna().sum(axis=1).astype(np.int8)
 
 def apply_cyclical(df, str_col):
     # df["hour"] = df["timestamp"].dt.hour
@@ -113,11 +138,12 @@ def apply_target_encode(df, target_col, cat_col, smooth=False, m=0, statistic=Fa
             print(f"'{cat_col}_IQR',")
     del df_group, group_mean; gc.collect()
 
-def apply_label_encode(df, str_col):
-    # ===== assumes Series of string =====
-    temp_dict = {value: i for i, value in enumerate(df[str_col].unique())}
-    df[str_col] = df[str_col].map(temp_dict)
-    del temp_dict; gc.collect()
+def apply_label_encode(df, subject_cols):
+    for str_col in subject_cols:
+        # ===== assumes Series of string =====
+        temp_dict = {value: i for i, value in enumerate(df[str_col].unique())}
+        df[str_col] = df[str_col].map(temp_dict)
+    del temp_dict, str_col; gc.collect()
 
 def apply_pca(df, subject_cols, r_after):
     # ===== assume input r_after is int =====
@@ -207,26 +233,34 @@ def apply_interpolation(df, subject_cols, int_order, supp_median_fill=False):
             del col
     del lin, pol, linear, polyno; gc.collect()
 
-"""
+
 # input: df, subject_cols
 # 初期値依存性に対応するiterative process
 # 次にエルボー法
-def apply_kmeans(df, subject_cols):
+def apply_kmeans(df, subject_cols, plot=True):
     from sklearn.cluster import KMeans
-    for i in range(1,11):
-        kmeans = KMeans(n_clusters=i)
-        kmeans.fit(df[subject_cols])
-    labels = kmeans.labels_
-    #color_codes = {0:'#00FF00', 1:'#FF0000', 2:'#0000FF', 3:'#04484C'}
-    #colors = [color_codes[x] for x in labels]
-    #plt.scatter(aiueo[:,0], aiueo[:,1], color=colors)
-    #plt.xlim(-0.0000000000000002,0.0000000000000002)
-    #plt.ylim(-0.0000000000000002,0.0000000000000002)
-    dic = dict(zip(range(len(site_pca)), labels))
-    weather_df['weather_PCA_category'] = weather_df['site_id'].map(dic)
-    del dic, aiueo, temptemp, site_pca, pca_array
-"""
-
+    elbow = []
+    for i in range(1,5):
+        try:
+            kmeans = KMeans(n_clusters=i, init='k-means++')
+            kmeans.fit(df[subject_cols])
+            elbow.append(kmeans.inertia_)
+        except:
+            continue
+    
+    if plot:
+        plt.plot(range(1,5), elbow, marker='o')
+        plt.xlabel('# of clusters')
+        plt.ylabel('SSE')
+        plt.show()
+    # labels = kmeans.labels_
+    # color_codes = {0:'#00FF00', 1:'#FF0000', 2:'#0000FF', 3:'#04484C'}
+    # colors = [color_codes[x] for x in labels]
+    # plt.scatter(aiueo[:,0], aiueo[:,1], color=colors)
+    # plt.show()
+    # https://qiita.com/deaikei/items/11a10fde5bb47a2cf2c2
+    del elbow, i; gc.collect()
+    
 def bruteforce_combination(df, subject_cols, choose=2, print_option=True):
     from itertools import combinations
     comb = combinations(subject_cols, choose)
