@@ -233,10 +233,6 @@ def apply_interpolation(df, subject_cols, int_order, supp_median_fill=False):
             del col
     del lin, pol, linear, polyno; gc.collect()
 
-
-# input: df, subject_cols
-# 初期値依存性に対応するiterative process
-# 次にエルボー法
 def apply_kmeans(df, subject_cols, plot=True):
     from sklearn.cluster import KMeans
     elbow = []
@@ -247,7 +243,6 @@ def apply_kmeans(df, subject_cols, plot=True):
             elbow.append(kmeans.inertia_)
         except:
             continue
-    
     if plot:
         plt.plot(range(1,5), elbow, marker='o')
         plt.xlabel('# of clusters')
