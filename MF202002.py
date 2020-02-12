@@ -1,19 +1,12 @@
 #Importing Libraries
 
 import gc
-import os
-from pathlib import Path
-import time
-
 import numpy as np
-from scipy import stats
 import pandas as pd
+from scipy import stats
 from sklearn.metrics import f1_score
-# from pandas.tseries.holiday import USFederalHolidayCalendar as calendar
-import datetime
 import matplotlib.pyplot as plt
 import seaborn as sns
-import pandas_profiling as pdp
 import warnings
 warnings.simplefilter('ignore')
 
@@ -72,13 +65,18 @@ def apply_freq_encode(df, str_col):
     del temp_dict; gc.collect()
 
 def apply_cyclical(df, str_col):
-    # df["hour"] = df["timestamp"].dt.hour
+    # e.g. df['hr'] = df.timestamp.dt.hour; apply_cyclical(df, 'hr')
     # ===== assumes integer array =====
-    df[str_col] -= df[str_col].min()
-    int_max = df[str_col].max()
-    df[f'{str_col}_sin'] = np.sin(2 * np.pi * df[str_col] / int_max)
-    df[f'{str_col}_cos'] = np.cos(2 * np.pi * df[str_col] / int_max)
-    del int_max; gc.collect()
+    # ===== assumes min and max exists in array =====
+    temp = pd.DataFrame()
+    temp['unique_sorted'] = (df[str_col] - df[str_col].min()).sort_values().unique()
+    int_max = temp.unique_sorted.max()
+    temp['sin'] = np.sin(2 * np.pi * temp.unique_sorted / int_max)
+    temp['cos'] = np.cos(2 * np.pi * temp.unique_sorted / int_max)
+    temp = temp.set_index('unique_sorted')
+    df[f'{str_col}_sin'] = (df[str_col] - df[str_col].min()).map(temp.sin)
+    df[f'{str_col}_cos'] = (df[str_col] - df[str_col].min()).map(temp.cos)
+    del temp, int_max; gc.collect()
 
 def apply_target_encode(df, test_df, target_col, cat_col, smooth=False, m=0, statistic=False, print_option=False):
     # df[target_col] = np.log1p(df[target_col])
@@ -458,88 +456,69 @@ gc.collect()
 access_pre(train_df, test_foruser, meta_access)
 gc.collect()
 
-def lgb_train(train_set, valid_set, metric,
-              lr, nl, md, bf, ff, mcw, mdil, l1, l2):
-    import lightgbm as lgb
+def lgb_kfold_clf(X_train, y_train,
+                  category_cols, metric='auc',
+                  learning_rate=0.07302765928886983, num_leaves=226.33302031283338, max_depth=89.28610428015179,
+                  bagging_fraction=0.8412111930704294, feature_fraction=0.2426023693040491,
+                  min_child_weight=0.11038748808743758, min_data_in_leaf=94.16721665585673,
+                  lambda_l1=2.780290034439586, lambda_l2=298.72604019749025,
+                  bayes_opt=True):
+    
     params = {'objective': 'binary',
               'metric': metric,
               'boosting': 'gbdt',
               'seed': 8982,
-              'learning_rate': lr,
-              'num_leaves': int(nl),
-              'max_depth': int(md),
+              'learning_rate': learning_rate,
+              'num_leaves': int(num_leaves),
+              'max_depth': int(max_depth),
               'bagging_freq': int(5),
-              'bagging_fraction': bf,
-              'feature_fraction': ff,
-              'min_child_weight': mcw,   
-              'min_data_in_leaf': int(mdil),
-              'lambda_l1': l1,
-              'lambda_l2': l2}
+              'bagging_fraction': bagging_fraction,
+              'feature_fraction': feature_fraction,
+              'min_child_weight': min_child_weight,   
+              'min_data_in_leaf': int(min_data_in_leaf),
+              'lambda_l1': lambda_l1,
+              'lambda_l2': lambda_l2}
               #'verbosity': int(-1)}
-
-    # ===== train_set: expects tuple (X_train, y_train) =====
-    X_train, y_train = train_set
-    # ===== valid_set: expects tuple (X_valid, y_valid) =====
-    X_valid, y_valid = valid_set
-
-    # ===== define data in lgb terms =====
-    d_train = lgb.Dataset(X_train, label=y_train, categorical_feature=category_cols)
-    d_valid = lgb.Dataset(X_valid, label=y_valid, categorical_feature=category_cols)
-    watchlist = [d_train, d_valid]
-
-    learning_curve = {}
-    model = lgb.train(params,
-                      train_set=d_train,
-                      valid_sets=watchlist,
-                      num_boost_round=600,
-                      evals_result=learning_curve,
-                      verbose_eval=200,#False,
-                      early_stopping_rounds=20)
-    
-    best_score = {f'train_{metric}': model.best_score['training'][f'{metric}'],
-                  f'valid_{metric}': model.best_score['valid_1'][f'{metric}']}
-    return model, best_score, learning_curve
-
-
-def lgb_kfold(X_train, y_train,
-              learning_rate=0.07302765928886983, num_leaves=226.33302031283338, max_depth=89.28610428015179,
-              bagging_fraction=0.8412111930704294, feature_fraction=0.2426023693040491,
-              min_child_weight=0.11038748808743758, min_data_in_leaf=94.16721665585673,
-              lambda_l1=2.780290034439586, lambda_l2=298.72604019749025,
-              bayes_opt=True):
-    from sklearn.model_selection import StratifiedKFold
-    kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=8983)
-    metric = 'auc'
+             
+    import lightgbm as lgb
     #cat_features = [X_train.columns.get_loc(cat_col) for cat_col in category_cols]
     #print(cat_features)
     
-    oofs = np.zeros(X_train.shape[0],)
+    oofs = np.zeros(X_train.shape[0])
     models = []; learning_curves = []; best_scores = []; valid_score = []
-    for train_idx, valid_idx in kf.split(X_train, y_train):
-        train_data = X_train.iloc[train_idx,:], y_train[train_idx]
-        valid_data = X_train.iloc[valid_idx,:], y_train[valid_idx]
+    
+    from sklearn.model_selection import StratifiedKFold
+    kf = StratifiedKFold(n_splits=4, shuffle=True, random_state=8983)
+    for i, (train_idx, valid_idx) in enumerate(kf.split(X_train, y_train)):
+        X_train_fold = X_train.iloc[train_idx,:]
+        y_train_fold = y_train[train_idx]
+        X_valid_fold = X_train.iloc[valid_idx,:]
+        y_valid_fold = y_train[valid_idx]
+        d_train = lgb.Dataset(X_train_fold, label=y_train_fold, categorical_feature=category_cols)
+        d_valid = lgb.Dataset(X_valid_fold, label=y_valid_fold, categorical_feature=category_cols)
+        
+        print(f'========== Training LightGBM, {i+1}-th fold ==========')
+        learning_curve = {}
+        model = lgb.train(params,
+                          train_set=d_train,
+                          valid_sets=[d_train, d_valid],
+                          num_boost_round=600,
+                          evals_result=learning_curve,
+                          verbose_eval=200,#False,
+                          early_stopping_rounds=20)
+        best_score = {f'train_{metric}': model.best_score['training'][f'{metric}'],
+                      f'valid_{metric}': model.best_score['valid_1'][f'{metric}']}
 
-        model, best_score, learning_curve = lgb_train(train_set=train_data,
-                                                      valid_set=valid_data,
-                                                      metric=metric,
-                                                      lr=learning_rate,
-                                                      nl=num_leaves,
-                                                      md=max_depth,
-                                                      bf=bagging_fraction,
-                                                      ff=feature_fraction,
-                                                      mcw=min_child_weight,
-                                                      mdil=min_data_in_leaf,
-                                                      l1=lambda_l1,
-                                                      l2=lambda_l2)
         oofs[valid_idx] = model.predict(X_train.iloc[valid_idx,:], num_iteration=model.best_iteration)
         models.append(model)
         learning_curves.append(learning_curve)
         best_scores.append(best_score)
-        gc.collect()
         valid_score.append(best_score[f'valid_{metric}'])
+        del X_train_fold, y_train_fold, X_valid_fold, y_valid_fold, d_train, d_valid
+        gc.collect()
+        
     valid_std_score = np.std(valid_score)
     valid_avg_score = np.mean(valid_score)
-    
     
     if bayes_opt:
         return valid_avg_score
@@ -549,14 +528,14 @@ def lgb_kfold(X_train, y_train,
 def iterative_cv(X_train_full, y_train, added_cols):
     # ===== added_cols assumes list of evaluating feature names =====
     # ===== e.g. list(set(X_train_full.columns) - set(common_cols)) =====
-    init_valid_avg_score = lgb_kfold(X_train_full[common_cols + category_cols], y_train, bayes_opt=True)
+    init_valid_avg_score = lgb_kfold_clf(X_train_full[common_cols + category_cols], y_train, bayes_opt=True)
     init_valid_avg_score *= -1
     print(f'Current best score is {init_valid_avg_score}')
     options = []; discards = []
     for col in added_cols:
         
         X_train = X_train_full[common_cols + [col] + category_cols]
-        new_valid_avg_score = lgb_kfold(X_train, y_train)
+        new_valid_avg_score = lgb_kfold_clf(X_train, y_train)
         new_valid_avg_score *= -1
         degree = new_valid_avg_score - init_valid_avg_score
         if degree > 0: # degree < 0 if objective is to minimize metric.
@@ -572,11 +551,11 @@ def iterative_cv(X_train_full, y_train, added_cols):
 def iterative_elim(X_train_full, y_train, common_cols, category_cols):
     options = []; discards = []
     
-    init_valid_avg_score = lgb_kfold(X_train_full[common_cols + category_cols], y_train, bayes_opt=True)
+    init_valid_avg_score = lgb_kfold_clf(X_train_full[common_cols + category_cols], y_train, bayes_opt=True)
     for col in common_cols:
         temp_cols = list(set(common_cols)-{col}) + category_cols
         X_train = X_train_full[temp_cols]
-        new_valid_avg_score = lgb_kfold(X_train, y_train)
+        new_valid_avg_score = lgb_kfold_clf(X_train, y_train)
         new_valid_avg_score *= 1
         degree = new_valid_avg_score - init_valid_avg_score
         if degree > 0: # degree < 0 if objective is to minimize metric.
@@ -593,14 +572,14 @@ def iterative_elim(X_train_full, y_train, common_cols, category_cols):
     
     # ===== added_cols assumes list of evaluating feature names =====
     # ===== e.g. list(set(X_train_full.columns) - set(common_cols)) =====
-    init_valid_avg_score = lgb_kfold(X_train_full[common_cols + category_cols], y_train, bayes_opt=True)
+    init_valid_avg_score = lgb_kfold_clf(X_train_full[common_cols + category_cols], y_train, bayes_opt=True)
     init_valid_avg_score *= -1
     print(f'Current best score is {init_valid_avg_score}')
     options = []; discards = []
     for col in added_cols:
         
         X_train = X_train_full[common_cols + [col] + category_cols]
-        new_valid_avg_score = lgb_kfold(X_train, y_train)
+        new_valid_avg_score = lgb_kfold_clf(X_train, y_train)
         new_valid_avg_score *= -1
         degree = new_valid_avg_score - init_valid_avg_score
         if degree > 0: # degree < 0 if objective is to minimize metric.
@@ -612,26 +591,6 @@ def iterative_elim(X_train_full, y_train, common_cols, category_cols):
     discards.sort(key=lambda tup: tup[1])
     del col, X_train, degree; gc.collect()
     return options, discards
-
-def bruteforce_combination(df, subject_cols, choose=2, print_option=True):
-    from itertools import combinations
-    comb = combinations(subject_cols, choose)
-    for feat_1, feat_2 in comb:
-        df[f'{feat_1}_.*_{feat_2}'] = df[f'{feat_1}'] * df[f'{feat_1}']
-        df[f'{feat_1}_.-_{feat_2}'] = df[f'{feat_1}'] - df[f'{feat_1}']
-        if print_option:
-            #print('Generated features: bruteforce_feature_combination')
-            print(f"'{feat_1}_.*_{feat_2}',")
-            print(f"'{feat_1}_.-_{feat_2}',")
-    del comb, feat_1, feat_2; gc.collect()
-
-def plot_feature_importance(model):
-    importance_df = pd.DataFrame(model.feature_importance(),
-                                 index=[common_cols + category_cols],
-                                 columns=['importance']).sort_values('importance')
-    fig, ax = plt.subplots(figsize=(10, 13))
-    importance_df.plot.barh(ax=ax)
-    fig.show()
 
 def f1_threshold_search(y_true, y_proba, linspace=100):
     best_threshold = 0
@@ -655,7 +614,7 @@ def bayes_opt_lgbm(init_points=20, n_iteration=80):
               'max_depth': (-1, 100),
               'lambda_l1': (0.1, 300), 
               'lambda_l2': (0.1, 300)}
-    optimizer = BayesianOptimization(f=lgb_kfold, pbounds=bounds, random_state=8982)
+    optimizer = BayesianOptimization(f=lgb_kfold_clf, pbounds=bounds, random_state=8982)
     optimizer.maximize(init_points=init_points, n_iter=n_iteration)
     
     #print('Best score:', -optimizer.max['target'])
@@ -665,32 +624,6 @@ def bayes_opt_lgbm(init_points=20, n_iteration=80):
     param = optimizer.max['params']#; cv = -optimizer.max['target']
     cv = optimizer.max['target']
     return param, cv
-
-def apply_kmeans(df, subject_cols, plot=True):
-    from sklearn.cluster import KMeans
-    elbow = []
-    clusters = range(1,11)
-    for i in clusters:
-        try:
-            kmeans = KMeans(n_clusters=i, init='k-means++')
-            kmeans.fit(df[subject_cols])
-            elbow.append(kmeans.inertia_)
-        except:
-            continue
-    if plot:
-        plt.plot(clusters, elbow, marker='o')
-        plt.xlabel('# of clusters')
-        plt.ylabel('SSE')
-        plt.show()
-        
-    labels = kmeans.labels_
-    # color_codes = {0:'#00FF00', 1:'#FF0000', 2:'#0000FF', 3:'#04484C'}
-    # colors = [color_codes[x] for x in labels]
-    # plt.scatter(aiueo[:,0], aiueo[:,1], color=colors)
-    # plt.show()
-    # https://qiita.com/deaikei/items/11a10fde5bb47a2cf2c2
-    del i; gc.collect()
-    return elbow, labels
     
 def pred(X_test, models):
     y_test_pred_total = np.zeros(X_test.shape[0])
@@ -711,8 +644,9 @@ added_cols = []
 
 X_train_full = train_df[common_cols + category_cols]
 X_test_full = test_foruser[common_cols + category_cols]
+
 y_train = train_df['premium_expired'].values
-vas, vss, models, oofs = lgb_kfold(X_train_full, y_train, bayes_opt=False)
+vas, vss, models, oofs = lgb_kfold_clf(X_train_full, y_train, category_cols, bayes_opt=False)
 print(f'valid_avg_score: {vas}')
 print(f'valid_std_score: {vss}')
 result = f1_threshold_search(y_train, oofs)
@@ -727,7 +661,7 @@ for i in range(len(models)):
                              columns=['importance']).sort_values('importance')
 
     feat_set.append([st[0] for st in importance_df[:80].index])
-unimportant = list(set(feat_set[0]).intersection(set(feat_set[1])).intersection(set(feat_set[2])).intersection(set(feat_set[3])).intersection(set(feat_set[4])))
+unimportant = list(set(feat_set[0]).intersection(set(feat_set[1])).intersection(set(feat_set[2])).intersection(set(feat_set[3])))
 iterative_elim_cols = ['uid_created_day_min', 'uid_service_id_2_ratio',
                        'birth_year_ratio', 'uid_created_day_std',
                        'premium_registered_at_hour']
@@ -737,7 +671,7 @@ common_cols = list(set(train_df.columns) - set(del_cols) - set(category_cols) - 
 X_train_full = train_df[common_cols + category_cols]
 X_test_full = test_foruser[common_cols + category_cols]
 
-vas, vss, models, oofs = lgb_kfold(X_train_full, y_train, bayes_opt=False)
+vas, vss, models, oofs = lgb_kfold_clf(X_train_full, y_train, category_cols, bayes_opt=False)
 print(f'valid_avg_score: {vas}')
 print(f'valid_std_score: {vss}')
 result = f1_threshold_search(y_train, oofs)
@@ -746,11 +680,10 @@ print(f'X_train_full.shape: {X_train_full.shape}')
 print(f'X_test_full.shape: {X_test_full.shape}')
 y_test = pred(X_test_full, models)
 
-oofs = pd.Series(oofs, name='premium_expired')
-oofs.to_csv('Han_OOF', index=False, header='premium_expired')#, float_format='%.4f')
-sample_submission['premium_expired'] = y_test
-sample_submission.to_csv('Han_y_test_soft', index=False)
-sample_submission[sample_submission.premium_expired <= result['threshold']] = int(0)
-sample_submission[sample_submission.premium_expired > result['threshold']] = int(1)
-sample_submission.to_csv('Han_ytest', index=False)
-
+#oofs = pd.Series(oofs, name='premium_expired')
+#oofs.to_csv('Han_OOF', index=False, header='premium_expired')#, float_format='%.4f')
+#sample_submission['premium_expired'] = y_test
+#sample_submission.to_csv('Han_y_test_soft', index=False)
+#sample_submission[sample_submission.premium_expired <= result['threshold']] = int(0)
+#sample_submission[sample_submission.premium_expired > result['threshold']] = int(1)
+#sample_submission.to_csv('Han_ytest', index=False)
