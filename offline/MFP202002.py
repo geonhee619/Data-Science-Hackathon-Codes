@@ -50,12 +50,19 @@ def reduce_mem_usage(df, use_float16=False):
     
     return df
 
-def apply_label_encode(df, subject_cols):
+def apply_label_encode(df, test_df, subject_cols):
+    from sklearn.preprocessing import LabelEncoder
+    lbl = LabelEncoder()
     for str_col in subject_cols:
         # ===== assumes Series of string =====
-        temp_dict = {value: i for i, value in enumerate(df[str_col].unique())}
-        df[str_col] = df[str_col].map(temp_dict)
-    del temp_dict, str_col; gc.collect()
+        # temp_dict = {value: i for i, value in enumerate(df[str_col].unique())}
+        # df[str_col] = (df[str_col].map(temp_dict)).astype(np.int16)
+        # test_df[str_col] = (test_df[str_col].map(temp_dict)).astype(np.int16)
+    # del temp_dict, str_col; gc.collect()
+        lbl.fit(df[str_col].unique())
+        df[str_col] = lbl.transform(df[str_col])
+        test_df[str_col] = lbl.transform(test_df[str_col])
+    del lbl, str_col; gc.collect()
 
 def apply_freq_encode(df, str_col):
     temp_dict = {sample: df.loc[df[str_col]==sample].shape[0] for sample in df[str_col].unique()}
