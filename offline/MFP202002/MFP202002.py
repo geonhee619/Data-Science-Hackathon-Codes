@@ -83,7 +83,6 @@ def apply_cyclical(df, str_col):
     del temp, int_max; gc.collect()
 
 def apply_target_encode(df, test_df, target_col, cat_col, smooth=False, m=0, statistic=False, print_option=False):
-    # df[target_col] = np.log1p(df[target_col])
     df_group = df.groupby(cat_col)[target_col]
     group_mean = df_group.mean().astype(np.float16)
     
