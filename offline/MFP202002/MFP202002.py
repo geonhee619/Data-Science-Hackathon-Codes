@@ -571,30 +571,6 @@ def iterative_elim(X_train_full, y_train, common_cols, category_cols):
     del col, X_train, degree; gc.collect()
     return options, discards
 
-    
-    
-    # ===== added_cols assumes list of evaluating feature names =====
-    # ===== e.g. list(set(X_train_full.columns) - set(common_cols)) =====
-    init_valid_avg_score = lgb_kfold_clf(X_train_full[common_cols + category_cols], y_train, bayes_opt=True)
-    init_valid_avg_score *= -1
-    print(f'Current best score is {init_valid_avg_score}')
-    options = []; discards = []
-    for col in added_cols:
-        
-        X_train = X_train_full[common_cols + [col] + category_cols]
-        new_valid_avg_score = lgb_kfold_clf(X_train, y_train)
-        new_valid_avg_score *= -1
-        degree = new_valid_avg_score - init_valid_avg_score
-        if degree > 0: # degree < 0 if objective is to minimize metric.
-            options.append((col, degree))
-            print(f"\nFeature '{col}', improved CV score by {degree}\n")
-        else:
-            discards.append((col, degree))
-    options.sort(key=lambda tup: tup[1])
-    discards.sort(key=lambda tup: tup[1])
-    del col, X_train, degree; gc.collect()
-    return options, discards
-
 def f1_threshold_search(y_true, y_proba, linspace=100):
     best_threshold = 0
     best_score = 0
@@ -664,11 +640,15 @@ for i in range(len(models)):
                              columns=['importance']).sort_values('importance')
 
     feat_set.append([st[0] for st in importance_df[:80].index])
+
 unimportant = list(set(feat_set[0]).intersection(set(feat_set[1])).intersection(set(feat_set[2])).intersection(set(feat_set[3])))
+
 iterative_elim_cols = ['uid_created_day_min', 'uid_service_id_2_ratio',
                        'birth_year_ratio', 'uid_created_day_std',
                        'premium_registered_at_hour']
+
 common_cols = list(set(train_df.columns) - set(del_cols) - set(category_cols) - set(unimportant) - set(iterative_elim_cols))
+
 #options, discards = iterative_cv(X_train_full, y_train, added_cols)
 
 X_train_full = train_df[common_cols + category_cols]
